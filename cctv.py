@@ -5,6 +5,7 @@ import mediapipe as mp
 import torch
 import torch.nn as nn
 from collections import deque
+import RPi.GPIO as GPIO
 
 class CONFIG:
     # YOLOv5 모델 경로
@@ -19,6 +20,11 @@ class CONFIG:
     down_threshold = 0.7    # 쓰러짐 임계값 (Fall Down + Lying Down) / max_Frame
     MAX_FRAME = 600         # 쓰러짐을 인식하기 위한 전체 프레임 수 ((Fall Down + Lying Down) / Max_FRAME >= down_threshold // 쓰러짐)
     MIN_FRAME = 200         # 쓰러짐을 인식하기 위한 최소의 프레임 수
+
+    LED_SAFE = False
+    LED_WAR = False
+    LED_RM = False
+    led_pisns = [17, 27, 22] # safe, war, rm
 
 # 객체 클래스 이름 정의
 class_names = ['Hardhat', 'Mask', 'NO-Hardhat', 'NO-Mask', 'NO-Safety Vest',
@@ -36,8 +42,22 @@ colors = {
     'machinery': (128, 128, 0),   # Olive
     'vehicle': (128, 0, 0),       # Maroon
 }
+GPIO.setmode(GPIO.BCM)
+for pin in CONFIG.led_pisns:
+    GPIO.setup(pin, GPIO.OUT)
 
 action_frame = deque(maxlen=CONFIG.MAX_FRAME)
+
+def print_led():
+    if (not CONFIG.LED_WAR) and (not CONFIG.LED_RM):
+        CONFIG.LED_SAFE = True
+    else:
+        CONFIG.LED_SAFE = False
+
+    GPIO.output(CONFIG.led_pisns[0], GPIO.HIGH if CONFIG.LED_SAFE else GPIO.LOW)  # CONFIG.LED_SAFE이 True이면 LED ON, False이면 OFF
+    GPIO.output(CONFIG.led_pisns[1], GPIO.HIGH if CONFIG.LED_WAR else GPIO.LOW)  # CONFIG.LED_WAR이 True이면 LED ON, False이면 OFF
+    GPIO.output(CONFIG.led_pisns[2], GPIO.HIGH if CONFIG.LED_RM else GPIO.LOW)  # CONFIG.LED_RM이 True이면 LED ON, False이면 OFF
+        
 
 # 이미지 전처리 함수
 def preprocess_image(image, size=CONFIG.img_size):
@@ -99,6 +119,17 @@ def draw_skeleton(frame, landmarks):
     mp_pose = mp.solutions.pose
     mp_drawing.draw_landmarks(frame, landmarks, mp_pose.POSE_CONNECTIONS)
 
+def overlap(x1, y1, x2, y2, x1_obj, y1_obj, x2_obj, y2_obj):
+    """
+    두 개의 바운딩 박스가 겹치는지 여부를 확인하는 함수.
+    (x1, y1, x2, y2): 첫 번째 박스의 좌상단(x1, y1)과 우하단(x2, y2) 좌표
+    (x1_obj, y1_obj, x2_obj, y2_obj): 두 번째 박스의 좌상단(x1_obj, y1_obj)과 우하단(x2_obj, y2_obj) 좌표
+    """
+    # 겹치지 않는 경우를 확인 (한 박스가 다른 박스의 왼쪽, 오른쪽, 위, 아래에 있으면 겹치지 않음)
+    if x1 > x2_obj or x2 < x1_obj or y1 > y2_obj or y2 < y1_obj:
+        return False  # 겹치지 않음
+    return True  # 겹침
+
 def main():
     # ONNX 모델 로드
     ort_object_session = onnxruntime.InferenceSession(CONFIG.object_onnx_model_path)
@@ -127,11 +158,63 @@ def main():
         # 박스 그리기 및 스켈레톤 예측
         for box in boxes:
             x1, y1, x2, y2, confidence, class_id = box
-            
+                
             # 객체 클래스 이름과 신뢰도 표시
             class_name = class_names[class_id]
             label = f"{class_name}: {confidence:.2f}"  # 클래스 이름과 신뢰도 포맷
+
+        person_boxes = []
+        hardhat_boxes = []
+        no_hardhat_boxes = []
+        safety_vest_boxes = []
+        no_safety_vest_boxes = []
+
+        if class_name == 'Person':
+            person_boxes.append((x1, y1, x2, y2))
+        elif class_name == 'Hardhat':
+            hardhat_boxes.append((x1, y1, x2, y2))
+        elif class_name == 'NO-Hardhat':
+            no_hardhat_boxes.append((x1, y1, x2, y2))
+        elif class_name == 'Safety Vest':
+            safety_vest_boxes.append((x1, y1, x2, y2))
+        elif class_name == 'NO-Safety Vest':
+            no_safety_vest_boxes.append((x1, y1, x2, y2))
             
+        for person_box in person_boxes:
+            px1, py1, px2, py2 = person_box
+            hardhat_count = 0
+            no_hardhat_count = 0
+            safety_vest_count = 0
+            no_safety_vest_count = 0
+
+                # 헬멧 착용 여부 확인
+            for hardhat_box in hardhat_boxes:
+                hx1, hy1, hx2, hy2 = hardhat_box
+                if overlap(px1, py1, px2, py2, hx1, hy1, hx2, hy2):  # 겹치는지 확인
+                    hardhat_count += 1
+
+            for no_hardhat_box in no_hardhat_boxes:
+                nhx1, nhy1, nhx2, nhy2 = no_hardhat_box
+                if overlap(px1, py1, px2, py2, nhx1, nhy1, nhx2, nhy2):
+                    no_hardhat_count += 1
+
+            # 안전 조끼 착용 여부 확인
+            for safety_vest_box in safety_vest_boxes:
+                svx1, svy1, svx2, svy2 = safety_vest_box
+                if overlap(px1, py1, px2, py2, svx1, svy1, svx2, svy2):
+                    safety_vest_count += 1
+
+            for no_safety_vest_box in no_safety_vest_boxes:
+                nsvx1, nsvy1, nsvx2, nsvy2 = no_safety_vest_box
+                if overlap(px1, py1, px2, py2, nsvx1, nsvy1, nsvx2, nsvy2):
+                    no_safety_vest_count += 1     
+
+            if(len(person_boxes) <= hardhat_count and len(person_boxes) <= safety_vest_count):
+                CONFIG.LED_WAR = False
+                print_led() 
+            else:
+                CONFIG.LED_WAR = True
+                print_led()
             # 박스 그리기
             # cv2.rectangle(frame, (x1, y1), (x2, y2), colors[class_name], 2)  # 박스 그리기
             # cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colors[class_name], 2)  # 라벨 텍스트 그리기
@@ -158,11 +241,14 @@ def main():
             lying_down_count = action_frame.count('Lying Down')
             
             if(len(action_frame) >= CONFIG.MIN_FRAME and (fall_down_count+lying_down_count)/len(action_frame) >= CONFIG.down_threshold):
+                CONFIG.LED_RM = True
+                print_led()
                 print("Emergency Challenge ~!~!~!~!~!~!~!~!~!~!~")
             else:
+                CONFIG.LED_RM = False
+                print_led()
                 for idx in range(1, len(states)):
                     print(states[idx], ":", action_frame.count(states[idx]), sep=" ")
-
 
             #if class_name == 'Person':  # 'Person' 클래스에 대해서만 스켈레톤 예측
             # # 스켈레톤 좌표 추출
