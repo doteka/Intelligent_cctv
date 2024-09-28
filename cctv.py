@@ -24,7 +24,8 @@ class CONFIG:
     LED_SAFE = False
     LED_WAR = False
     LED_RM = False
-    led_pisns = [17, 27, 22] # safe, war, rm
+    LED_PINS = {'R': 17, 'G': 27, 'B': 22}
+
 
 # 객체 클래스 이름 정의
 class_names = ['Hardhat', 'Mask', 'NO-Hardhat', 'NO-Mask', 'NO-Safety Vest',
@@ -43,21 +44,25 @@ colors = {
     'vehicle': (128, 0, 0),       # Maroon
 }
 GPIO.setmode(GPIO.BCM)
-for pin in CONFIG.led_pisns:
-    GPIO.setup(pin, GPIO.OUT)
+GPIO.setup(CONFIG.LED_PINS['R'], GPIO.OUT)
+GPIO.setup(CONFIG.LED_PINS['G'], GPIO.OUT)
+GPIO.setup(CONFIG.LED_PINS['B'], GPIO.OUT)
 
 action_frame = deque(maxlen=CONFIG.MAX_FRAME)
 
 def print_led():
-    if (not CONFIG.LED_WAR) and (not CONFIG.LED_RM):
-        CONFIG.LED_SAFE = True
-    else:
-        CONFIG.LED_SAFE = False
-
-    GPIO.output(CONFIG.led_pisns[0], GPIO.HIGH if CONFIG.LED_SAFE else GPIO.LOW)  # CONFIG.LED_SAFE이 True이면 LED ON, False이면 OFF
-    GPIO.output(CONFIG.led_pisns[1], GPIO.HIGH if CONFIG.LED_WAR else GPIO.LOW)  # CONFIG.LED_WAR이 True이면 LED ON, False이면 OFF
-    GPIO.output(CONFIG.led_pisns[2], GPIO.HIGH if CONFIG.LED_RM else GPIO.LOW)  # CONFIG.LED_RM이 True이면 LED ON, False이면 OFF
-        
+    if CONFIG.LED_RM:  # CONFIG.LED_RM이 True면 빨간색 LED를 켭니다.
+        GPIO.output(CONFIG.led_pins['R'], GPIO.HIGH)  # 빨간색 ON
+        GPIO.output(CONFIG.led_pins['G'], GPIO.LOW)   # 초록색 OFF
+        GPIO.output(CONFIG.led_pins['B'], GPIO.LOW)   # 노란색 OFF
+    elif CONFIG.LED_WAR:  # CONFIG.LED_WAR이 True면 노란색 LED를 켭니다.
+        GPIO.output(CONFIG.led_pins['R'], GPIO.HIGH)  # 빨간색 ON (노란색 만들기)
+        GPIO.output(CONFIG.led_pins['G'], GPIO.HIGH)  # 초록색 ON (노란색 만들기)
+        GPIO.output(CONFIG.led_pins['B'], GPIO.LOW)   # 파란색 OFF
+    else:  # 둘 다 False면 녹색 LED를 켭니다.
+        GPIO.output(CONFIG.led_pins['R'], GPIO.LOW)   # 빨간색 OFF
+        GPIO.output(CONFIG.led_pins['G'], GPIO.HIGH)  # 초록색 ON
+        GPIO.output(CONFIG.led_pins['B'], GPIO.LOW)   # 파란색 OFF
 
 # 이미지 전처리 함수
 def preprocess_image(image, size=CONFIG.img_size):
